@@ -1,10 +1,39 @@
 // integer_ptr: pointer to array of num_int integers
 export fn sum_jasmin(reg u32 integer_ptr, reg u32 num_int) -> reg u32 {
-    reg u32 sum = 0;
+    reg u32 sum, cur_el, i;
+    sum = 0;
+    i = 0;
+
+    while (i < num_int) {
+        cur_el = (u32)[integer_ptr];
+        sum += cur_el;
+        integer_ptr += 4;
+        i += 1;
+    }
+
     return sum;
 }
 
 export fn sum_jasmin_fast(reg u32 integer_ptr, reg u32 num_int) -> reg u32 {
+    reg u32 sum, cur_el, rem;
     reg u32 sum = 0;
+    inline int k;
+    rem = num_int;
+    
+    while (rem >= 10) {
+        for k = 0 to 10 {
+            cur_el = (u32)[integer_ptr + 4*k];
+            sum += cur_el;
+        }
+        integer_ptr += 40;
+        rem -= 10;
+    }
+    while (rem > 0) {
+        cur_el = (u32)[integer_ptr];
+        sum += cur_el;
+        integer_ptr += 4;
+        rem -= 1;
+    }
+
     return sum;
 }

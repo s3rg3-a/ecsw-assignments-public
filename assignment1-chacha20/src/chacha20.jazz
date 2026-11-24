@@ -7,6 +7,10 @@
 //           c += d; b ^= c; b <<<= 7
 fn quarterround(reg u32 a, reg u32 b, reg u32 c, reg u32 d)
     -> reg u32, reg u32, reg u32, reg u32 {
+        a += b; d ^= a; d <<r= 16;
+        c += d; b ^= c; b <<r= 12;
+        a += b; d ^= a; d <<r= 8;
+        c += d; b ^= c; b <<r= 7;
     return a, b, c, d;
 }
 
@@ -16,6 +20,35 @@ fn quarterround(reg u32 a, reg u32 b, reg u32 c, reg u32 d)
 // Column 2: (2, 6, 10, 14)
 // Column 3: (3, 7, 11, 15)
 fn column_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
+    reg u32 a, b, c, d;
+    inline int i;
+    for i = 0 to 4 {
+        a = pstate[i];
+        b = pstate[i + 4];
+        c = pstate[i + 8];
+        d = pstate[i + 12];
+        a, b, c, d = quarterround(a, b, c, d);
+        pstate[i] = a;
+        pstate[i + 4] = b;
+        pstate[i + 8] = c;
+        pstate[i + 12] = d;
+    }
+    return pstate;
+}
+
+// Performs quarterrounds on the specified indices
+// Used for diagonal_round
+inline fn diagonal_helper(reg ptr u32[16] pstate, inline int index_a, inline int index_b, inline int index_c, inline int index_d) -> reg ptr u32[16]{
+    reg u32 a, b, c, d;
+    a = pstate[index_a];
+    b = pstate[index_b];
+    c = pstate[index_c];
+    d = pstate[index_d];
+    a, b, c, d = quarterround(a, b, c, d);
+    pstate[index_a] = a;
+    pstate[index_b] = b;
+    pstate[index_c] = c;
+    pstate[index_d] = d;
     return pstate;
 }
 
@@ -25,22 +58,136 @@ fn column_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
 // Diagonal 2: (2, 7, 8, 13)
 // Diagonal 3: (3, 4, 9, 14)
 fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
+    reg u32 a, b, c, d;
+    inline int i;
+    pstate = diagonal_helper(pstate, 0, 5, 10, 15);
+    pstate = diagonal_helper(pstate, 1, 6, 11, 12);
+    pstate = diagonal_helper(pstate, 2, 7, 8, 13);
+    pstate = diagonal_helper(pstate, 3, 4, 9, 14);
     return pstate;
 }
 
-// void chacha20_block(const uint32_t input[16], uint32_t output[16])
 fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64]{
+    stack u32[16] ws;
+    reg ptr u32[16] ws_ptr;
+    reg u32 x, y;
+    inline int i;
+
+    // Copy input state into working state
+    for i = 0 to 16 {
+        x = input_ptr[i];
+        ws[i] = x;
+    }
+    
+    // Apply column and diagonal rounds
+    ws_ptr = ws;
+    for i = 0 to 10 {
+        ws_ptr = column_round(ws_ptr);
+        ws_ptr = diagonal_round(ws_ptr);
+    }
+
+    // Add the state and working_state
+    // state <- state + working_state
+    for i = 0 to 16 {
+        x = ws_ptr[i];
+        y = input_ptr[i];
+        x += y;
+        output_ptr[:u32 i] = x;
+    }
+
     return output_ptr;
 }
 
 fn chacha20_keysetup(reg ptr u32[16] state_ptr, reg ptr u8[32] sk_ptr) -> reg ptr u32[16]{
+    reg u32 constant, word;
+    inline int i;
+
+    // Words 0-3 are fixed constants
+    constant = 0x61707865;
+    state_ptr[0] = constant;
+    constant = 0x3320646e;
+    state_ptr[1] = constant;
+    constant = 0x79622d32;
+    state_ptr[2] = constant;
+    constant = 0x6b206574;
+    state_ptr[3] = constant;
+
+    // Words 4-11 are the key
+    // Each word is a 4-byte/32-bit sub-key
+    for i = 0 to 8 {
+        word = sk_ptr[:u32 i];
+        state_ptr[i + 4] = word;
+    }
+
     return state_ptr;
 }
+
 fn chacha20_ietf_ivsetup(reg ptr u32[16] state_ptr, reg ptr u8[12] nonce_ptr) -> reg ptr u32[16]{
+    reg u32 counter, word;
+    inline int i;
+
+    // Adding the counter to the state
+    counter = 0;
+    state_ptr[12] = counter;
+
+    // Words 12-15 are the nonce
+    for i = 0 to 3 {
+        word = nonce_ptr[:u32 i];
+        state_ptr[i + 13] = word;
+
+    }
+
     return state_ptr;
 }
 
 fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct_ptr, reg u32 msg_len) -> reg ptr u32[16]{
+    stack u8[64] keystream;
+    reg ptr u8[64] keystream_ptr;
+    reg u32 bytes_done, block_len, block_start, byte_index, byte, word, counter;
+    inline int i;
+
+    keystream_ptr = keystream;
+    bytes_done = 0;
+
+    while (bytes_done < msg_len) {
+        // Generate 64 bytes of keystream from the current state
+        keystream_ptr = chacha20_block(keystream_ptr, state_ptr);
+
+        // Check whether on last block or not
+        block_len = msg_len;
+        block_len -= bytes_done;
+        if (block_len > 64) {
+            block_len = 64;
+        }
+
+        // Address in the output buffer where this block starts
+        block_start = ct_ptr;
+        block_start += bytes_done;
+
+        // Full 64-byte block: copy 16 words of 4 bytes
+        if (block_len == 64) {
+            for i = 0 to 16 {
+                word = keystream_ptr[:u32 i];
+                [:u32 block_start + 4 * i] = word;
+            }
+        // Last, shorter block: copy byte by byte
+        } else {
+            byte_index = 0;
+            while (byte_index < block_len) {
+                byte = (32u)keystream_ptr[:u8 byte_index];
+                [:u8 block_start + byte_index] = #STRB(byte);
+                byte_index += 1;
+            }
+        }
+
+        // Increase the block counter (word 12) for the next block
+        counter = state_ptr[12];
+        counter += 1;
+        state_ptr[12] = counter;
+
+        bytes_done += block_len;
+    }
+
     return state_ptr;
 }
 
@@ -125,4 +272,14 @@ export fn test_chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr
 // sk_ptr: pointer to 32-byte secret key
 // ct_len: length of output in bytes
 export fn crypto_stream_chacha20_ietf(reg u32 ct_ptr, reg ptr u8[12] nonce_ptr, reg ptr u8[32] sk_ptr, reg u32 ct_len){
+    stack u32[16] state;
+    reg ptr u32[16] state_ptr;
+    reg u32 msg_ptr;
+
+    state_ptr = state;
+    state_ptr = chacha20_keysetup(state_ptr, sk_ptr);
+    state_ptr = chacha20_ietf_ivsetup(state_ptr, nonce_ptr);
+
+    msg_ptr = 0;
+    state_ptr = chacha20_encrypt_bytes(state_ptr, msg_ptr, ct_ptr, ct_len);
 }

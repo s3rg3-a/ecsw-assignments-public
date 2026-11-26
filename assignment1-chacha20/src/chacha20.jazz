@@ -93,8 +93,13 @@ inline fn double_round(reg u32 x0, reg u32 x1, reg u32 x2, reg u32 x3, reg u32 x
 
     }
 
+fn chacha20_block_added(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64], reg ptr u32[16]{
+    
+    output_ptr, input_ptr = chacha20_block_added(output_ptr, input_ptr);
+    return output_ptr;
+}
 
-fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64]{
+fn chacha20_block_added(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64], reg ptr u32[16]{
     stack u32[16] ws;
     stack u32[4] c;
     reg u32 x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15;
@@ -138,7 +143,7 @@ fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg p
         output_ptr[:u32 i] = t;
     }
 
-    return output_ptr;
+    return output_ptr, input_ptr;
 }
 
 fn chacha20_keysetup(reg ptr u32[16] state_ptr, reg ptr u8[32] sk_ptr) -> reg ptr u32[16]{
@@ -195,9 +200,9 @@ fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct
     while (bytes_done < msg_len) {
 
         () = #spill(state_ptr, ct_ptr, msg_len, bytes_done);
-        
+
         // Generate 64 bytes of keystream from the current state
-        keystream_ptr = chacha20_block(keystream_ptr, state_ptr);
+        keystream_ptr = chacha20_block_added(keystream_ptr, state_ptr);
 
         // Check whether on last block or not
         block_len = msg_len;

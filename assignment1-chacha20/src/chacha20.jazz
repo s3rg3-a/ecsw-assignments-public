@@ -58,8 +58,8 @@ inline fn diagonal_helper(reg ptr u32[16] pstate, inline int index_a, inline int
 // Diagonal 2: (2, 7, 8, 13)
 // Diagonal 3: (3, 4, 9, 14)
 inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
-    reg u32 a, b, c, d;
-    inline int i;
+    // reg u32 a, b, c, d; never used?
+    // inline int i; never used?
     pstate = diagonal_helper(pstate, 0, 5, 10, 15);
     pstate = diagonal_helper(pstate, 1, 6, 11, 12);
     pstate = diagonal_helper(pstate, 2, 7, 8, 13);
@@ -67,32 +67,75 @@ inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
     return pstate;
 }
 
+// Double round: 4 column quarterrounds and 4 diagonal ones
+// Rows a (x0,x1,x2,x3), b (x4,x5,x6,x7) and d (x12,x13,x14,x15) stay in registers.
+// Row c (x8,x9,x10,x11) lives on stack in c[0..3]. Only one c word in register at a time. 
+// Register use inside: 12 state words+1 temporary = 13 (might want to try 14 later).
+inline fn double_round(reg u32 x0, reg u32 x1, reg u32 x2, reg u32 x3, reg u32 x4, reg u32 x5,
+    reg u32 x6, reg u32 x7, reg u32 x12, reg u32 x13, reg u32 x14, reg u32 x15, stack u32[4] c)
+    -> reg u32, reg u32, reg u32, reg u32 , reg u32 , reg u32 , reg u32 , reg u32
+    , reg u32 , reg u32 , reg u32 , reg u32, stack u32[4] {
+
+    reg u32 t;
+    // Column round 
+    t = c[0]; x0,x4,t,x12 = quarterround(x0,x4,5,x12); c[0] = t; //(0,4,8,12)
+    t = c[1]; x1,x5,t,x13 = quarterround(x0,x4,5,x12); c[1] = t; //(1,5,9,13)
+    t = c[2]; x2,x6,t,x14 = quarterround(x0,x4,5,x12); c[2] = t; //(2,6,10,14)
+    t = c[3]; x3,x7,t,x15 = quarterround(x0,x4,5,x12); c[3] = t; //(3,7,11,15)
+
+    // Diagonal round 
+    t = c[2]; x0,x5,t,x15 = quarterround(x0,x4,5,x12); c[0] = t; //(0,4,8,12)
+    t = c[3]; x1,x6,t,x12 = quarterround(x0,x4,5,x12); c[1] = t; //(1,5,9,13)
+    t = c[0]; x2,x7,t,x13 = quarterround(x0,x4,5,x12); c[2] = t; //(2,6,10,14)
+    t = c[1]; x3,x4,t,x14 = quarterround(x0,x4,5,x12); c[3] = t; //(3,7,11,15)
+
+    return x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15,c;
+
+    }
+
+
 fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64]{
     stack u32[16] ws;
-    reg ptr u32[16] ws_ptr;
-    reg u32 x, y;
+    stack u32[4] c;
+    reg u32 x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15;
+    reg u32 t, y;
     inline int i;
 
-    // Copy input state into working state
-    for i = 0 to 16 {
-        x = input_ptr[i];
-        ws[i] = x;
+    () = #spill(output_ptr)
+
+    for i = 0 to 4 {     //Row c to stack
+        t = input_ptr[8+i]
+        c[i] = t;
     }
-    
-    // Apply column and diagonal rounds
-    ws_ptr = ws;
+
+    x0 = input_ptr[0]; x1 = input_ptr[1]; x2 = input_ptr[2]; x3 = input_ptr[3];
+    x4 = input_ptr[4]; x5 = input_ptr[5]; x6 = input_ptr[6]; x7 = input_ptr[7];
+    x12 = input_ptr[12]; x13 = input_ptr[13]; x14 = input_ptr[14]; x15 = input_ptr[15];
+
+    () = #spill(input_ptr)
+
+    // 20 rounds (10 double rounds)
     for i = 0 to 10 {
-        ws_ptr = column_round(ws_ptr);
-        ws_ptr = diagonal_round(ws_ptr);
+        x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15,c = double_round(x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15,c);
     }
+
+    ws[0] = x0; ws[1] = x1; ws[2] = x2; ws[3] = x3;
+    ws[4] = x4; ws[5] = x5; ws[6] = x6; ws[7] = x7;
+    for i = 0 to 4 {
+        t = c[i];
+        ws[8+i] = t;
+    }
+    ws[12] = x12; ws[13] = x13; ws[14] = x14; ws[15] = x15;
+
+    () = #unspill(input_ptr, output_ptr);
 
     // Add the state and working_state
     // state <- state + working_state
     for i = 0 to 16 {
-        x = ws_ptr[i];
+        t = ws[i];
         y = input_ptr[i];
-        x += y;
-        output_ptr[:u32 i] = x;
+        t += y;
+        output_ptr[:u32 i] = t;
     }
 
     return output_ptr;
@@ -219,6 +262,31 @@ export fn test_column_round(reg ptr u32[16] state_ptr) -> reg ptr u32[16] {
 export fn test_diagonal_round(reg ptr u32[16] state_ptr) -> reg ptr u32[16] {
     state_ptr = state_ptr;
     state_ptr = diagonal_round(state_ptr);
+    return state_ptr;
+}
+
+// Export wrapper for double_round (for testing against a reference)
+// state_ptr: pointer to 16-word (64-byte) state array; one double round in place
+export fn test_double_round(reg ptr u32[16] state_ptr) -> reg ptr u32[16] {
+    stack u32[4] c;
+    reg u32 x0, x1, x2, x3, x4, x5, x6, x7, x12, x13, x14, x15;
+    reg u32 t;
+    inline int i;
+
+    for i = 0 to 4 { t = state_ptr[8 + i]; c[i] = t; }
+    x0  = state_ptr[0];  x1  = state_ptr[1];  x2  = state_ptr[2];  x3  = state_ptr[3];
+    x4  = state_ptr[4];  x5  = state_ptr[5];  x6  = state_ptr[6];  x7  = state_ptr[7];
+    x12 = state_ptr[12]; x13 = state_ptr[13]; x14 = state_ptr[14]; x15 = state_ptr[15];
+
+    () = #spill(state_ptr);
+    x0, x1, x2, x3, x4, x5, x6, x7, x12, x13, x14, x15, c =
+        double_round(x0, x1, x2, x3, x4, x5, x6, x7, x12, x13, x14, x15, c);
+    () = #unspill(state_ptr);
+
+    state_ptr[0]  = x0;  state_ptr[1]  = x1;  state_ptr[2]  = x2;  state_ptr[3]  = x3;
+    state_ptr[4]  = x4;  state_ptr[5]  = x5;  state_ptr[6]  = x6;  state_ptr[7]  = x7;
+    for i = 0 to 4 { t = c[i]; state_ptr[8 + i] = t; }
+    state_ptr[12] = x12; state_ptr[13] = x13; state_ptr[14] = x14; state_ptr[15] = x15;
     return state_ptr;
 }
 

@@ -67,14 +67,31 @@ inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
     return pstate;
 }
 
-// One quarterround where 'a' stays in a register; b, c, d are loaded/stored.
+// Quarterround without explicit ROR instructions.
+// b and d are kept in rotated form: true b = b >>r 25, true d = d >>r 24.
+// Every rotation is absorbed into the barrel shifter of the next ADD/EOR.
+// The output uses the same convention as the input, so it holds for all rounds.
+inline fn quarterround_lazy(reg u32 a, reg u32 b, reg u32 c, reg u32 d)
+    -> reg u32, reg u32, reg u32, reg u32 {
+    a += b >>r 25;        // true b = ror(b, 25)
+    d  = a ^ (d >>r 24);  // true d = ror(d, 24); result pending rol 16
+    c += d >>r 16;
+    b  = c ^ (b >>r 25);  // pending rol 12
+    a += b >>r 20;
+    d  = a ^ (d >>r 16);  // pending rol 8
+    c += d >>r 24;
+    b  = c ^ (b >>r 20);  // pending rol 7
+    return a, b, c, d;
+}
+
+// One lazy quarterround where 'a' stays in a register; b, c, d are loaded/stored.
 inline fn qr_keep_a(reg ptr u32[16] p, reg u32 a, inline int ib, inline int ic, inline int id)
     -> reg ptr u32[16], reg u32 {
     reg u32 b, c, d;
     b = p[ib];
     c = p[ic];
     d = p[id];
-    a, b, c, d = quarterround(a, b, c, d);
+    a, b, c, d = quarterround_lazy(a, b, c, d);
     p[ib] = b;
     p[ic] = c;
     p[id] = d;
@@ -111,9 +128,22 @@ fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg p
     a2 = input_ptr[2];
     a3 = input_ptr[3];
 
-    // Rows b, c, d (words 4-15) go to the working state on the stack
-    for i = 4 to 16 {
+    // Rows b, c, d (words 4-15) go to the working state on the stack.
+    // Rows b and d are stored in rotated form for quarterround_lazy:
+    // b stored = b >>r 7  (so b_stored >>r 25 = b)
+    // d stored = d >>r 8  (so d_stored >>r 24 = d)
+    for i = 4 to 8 {
         x = input_ptr[i];
+        x >>r= 7;
+        ws[i] = x;
+    }
+    for i = 8 to 12 {
+        x = input_ptr[i];
+        ws[i] = x;
+    }
+    for i = 12 to 16 {
+        x = input_ptr[i];
+        x >>r= 8;
         ws[i] = x;
     }
 
@@ -123,18 +153,33 @@ fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg p
         ws_ptr, a0, a1, a2, a3 = double_round_keep_a(ws_ptr, a0, a1, a2, a3);
     }
 
-    // Feed-forward: row a from registers ...
+    // Feed-forward: state <- working_state + input
+    // Row a from registers
     y = input_ptr[0]; a0 += y; output_ptr[:u32 0] = a0;
     y = input_ptr[1]; a1 += y; output_ptr[:u32 1] = a1;
     y = input_ptr[2]; a2 += y; output_ptr[:u32 2] = a2;
     y = input_ptr[3]; a3 += y; output_ptr[:u32 3] = a3;
 
-    // ... rows b, c, d from the working state
-    for i = 4 to 16 {
+    // Row b: undo rotated form for free in the add
+    for i = 4 to 8 {
         x = ws_ptr[i];
         y = input_ptr[i];
-        x += y;
-        output_ptr[:u32 i] = x;
+        y += x >>r 25;
+        output_ptr[:u32 i] = y;
+    }
+    // Row c: plain
+    for i = 8 to 12 {
+        x = ws_ptr[i];
+        y = input_ptr[i];
+        y += x;
+        output_ptr[:u32 i] = y;
+    }
+    // Row d: undo rotated form for free in the add
+    for i = 12 to 16 {
+        x = ws_ptr[i];
+        y = input_ptr[i];
+        y += x >>r 24;
+        output_ptr[:u32 i] = y;
     }
 
     return output_ptr;

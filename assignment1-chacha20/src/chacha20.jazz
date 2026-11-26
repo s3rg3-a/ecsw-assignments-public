@@ -58,8 +58,8 @@ inline fn diagonal_helper(reg ptr u32[16] pstate, inline int index_a, inline int
 // Diagonal 2: (2, 7, 8, 13)
 // Diagonal 3: (3, 4, 9, 14)
 inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
-    reg u32 a, b, c, d;
-    inline int i;
+    //reg u32 a, b, c, d; not used?
+    //inline int i; not used?
     pstate = diagonal_helper(pstate, 0, 5, 10, 15);
     pstate = diagonal_helper(pstate, 1, 6, 11, 12);
     pstate = diagonal_helper(pstate, 2, 7, 8, 13);

@@ -78,16 +78,16 @@ inline fn double_round(reg u32 x0, reg u32 x1, reg u32 x2, reg u32 x3, reg u32 x
 
     reg u32 t;
     // Column round 
-    t = c[0]; x0,x4,t,x12 = quarterround(x0,x4,5,x12); c[0] = t; //(0,4,8,12)
-    t = c[1]; x1,x5,t,x13 = quarterround(x0,x4,5,x12); c[1] = t; //(1,5,9,13)
-    t = c[2]; x2,x6,t,x14 = quarterround(x0,x4,5,x12); c[2] = t; //(2,6,10,14)
-    t = c[3]; x3,x7,t,x15 = quarterround(x0,x4,5,x12); c[3] = t; //(3,7,11,15)
+    t = c[0]; x0,x4,t,x12 = quarterround(x0,x4,t,x12); c[0] = t; //(0,4,8,12)
+    t = c[1]; x1,x5,t,x13 = quarterround(x1,x5,t,x13); c[1] = t; //(1,5,9,13)
+    t = c[2]; x2,x6,t,x14 = quarterround(x2,x6,t,x14); c[2] = t; //(2,6,10,14)
+    t = c[3]; x3,x7,t,x15 = quarterround(x3,x7,t,x15); c[3] = t; //(3,7,11,15)
 
     // Diagonal round 
-    t = c[2]; x0,x5,t,x15 = quarterround(x0,x4,5,x12); c[0] = t; //(0,4,8,12)
-    t = c[3]; x1,x6,t,x12 = quarterround(x0,x4,5,x12); c[1] = t; //(1,5,9,13)
-    t = c[0]; x2,x7,t,x13 = quarterround(x0,x4,5,x12); c[2] = t; //(2,6,10,14)
-    t = c[1]; x3,x4,t,x14 = quarterround(x0,x4,5,x12); c[3] = t; //(3,7,11,15)
+    t = c[2]; x0,x5,t,x15 = quarterround(x0,x5,t,x15); c[2] = t; //(0,5,10,15)
+    t = c[3]; x1,x6,t,x12 = quarterround(x1,x6,t,x12); c[3] = t; //(1,6,11,12)
+    t = c[0]; x2,x7,t,x13 = quarterround(x2,x7,t,x13); c[0] = t; //(2,7,8,13)
+    t = c[1]; x3,x4,t,x14 = quarterround(x3,x4,t,x14); c[1] = t; //(3,4,9,14)
 
     return x0,x1,x2,x3,x4,x5,x6,x7,x12,x13,x14,x15,c;
 
@@ -101,10 +101,10 @@ fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg p
     reg u32 t, y;
     inline int i;
 
-    () = #spill(output_ptr)
+    () = #spill(output_ptr);
 
     for i = 0 to 4 {     //Row c to stack
-        t = input_ptr[8+i]
+        t = input_ptr[8+i];
         c[i] = t;
     }
 
@@ -112,7 +112,7 @@ fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg p
     x4 = input_ptr[4]; x5 = input_ptr[5]; x6 = input_ptr[6]; x7 = input_ptr[7];
     x12 = input_ptr[12]; x13 = input_ptr[13]; x14 = input_ptr[14]; x15 = input_ptr[15];
 
-    () = #spill(input_ptr)
+    () = #spill(input_ptr);
 
     // 20 rounds (10 double rounds)
     for i = 0 to 10 {

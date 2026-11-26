@@ -14,61 +14,58 @@ inline fn quarterround(reg u32 a, reg u32 b, reg u32 c, reg u32 d)
     return a, b, c, d;
 }
 
-// Two independent quarterrounds, interleaved step by step.
-// (a0,b0,c0,d0) and (a1,b1,c1,d1) never depend on each other, so the
-// instructions of one can fill the load-use / ALU gaps of the other.
-inline fn quarterround2(reg u32 a0, reg u32 b0, reg u32 c0, reg u32 d0,
-                        reg u32 a1, reg u32 b1, reg u32 c1, reg u32 d1)
-    -> reg u32, reg u32, reg u32, reg u32,
-       reg u32, reg u32, reg u32, reg u32 {
-    a0 += b0;      a1 += b1;
-    d0 ^= a0;      d1 ^= a1;
-    d0 <<r= 16;    d1 <<r= 16;
-    c0 += d0;      c1 += d1;
-    b0 ^= c0;      b1 ^= c1;
-    b0 <<r= 12;    b1 <<r= 12;
-    a0 += b0;      a1 += b1;
-    d0 ^= a0;      d1 ^= a1;
-    d0 <<r= 8;     d1 <<r= 8;
-    c0 += d0;      c1 += d1;
-    b0 ^= c0;      b1 ^= c1;
-    b0 <<r= 7;     b1 <<r= 7;
-    return a0, b0, c0, d0, a1, b1, c1, d1;
-}
-
-// Load 8 state words, do two quarterrounds, store them back.
-inline fn qr_pair(reg ptr u32[16] p,
-                  inline int ia0, inline int ib0, inline int ic0, inline int id0,
-                  inline int ia1, inline int ib1, inline int ic1, inline int id1)
-    -> reg ptr u32[16] {
-    reg u32 a0, b0, c0, d0, a1, b1, c1, d1;
-
-    a0 = p[ia0]; b0 = p[ib0]; c0 = p[ic0]; d0 = p[id0];
-    a1 = p[ia1]; b1 = p[ib1]; c1 = p[ic1]; d1 = p[id1];
-
-    a0, b0, c0, d0, a1, b1, c1, d1 = quarterround2(a0, b0, c0, d0, a1, b1, c1, d1);
-
-    p[ia0] = a0; p[ib0] = b0; p[ic0] = c0; p[id0] = d0;
-    p[ia1] = a1; p[ib1] = b1; p[ic1] = c1; p[id1] = d1;
-    return p;
-}
-
-// Column round: all 4 columns, as 2 interleaved pairs
-// (0,4,8,12) (1,5,9,13) (2,6,10,14) (3,7,11,15)
+// Column round: applies quarterround to all 4 columns
+// Column 0: (0, 4, 8, 12)
+// Column 1: (1, 5, 9, 13)
+// Column 2: (2, 6, 10, 14)
+// Column 3: (3, 7, 11, 15)
 inline fn column_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
-    pstate = qr_pair(pstate, 0, 4,  8, 12,   1, 5,  9, 13);
-    pstate = qr_pair(pstate, 2, 6, 10, 14,   3, 7, 11, 15);
+    reg u32 a, b, c, d;
+    inline int i;
+    for i = 0 to 4 {
+        a = pstate[i];
+        b = pstate[i + 4];
+        c = pstate[i + 8];
+        d = pstate[i + 12];
+        a, b, c, d = quarterround(a, b, c, d);
+        pstate[i] = a;
+        pstate[i + 4] = b;
+        pstate[i + 8] = c;
+        pstate[i + 12] = d;
+    }
     return pstate;
 }
 
-// Diagonal round: all 4 diagonals, as 2 interleaved pairs
-// (0,5,10,15) (1,6,11,12) (2,7,8,13) (3,4,9,14)
+// Performs quarterrounds on the specified indices
+// Used for diagonal_round
+inline fn diagonal_helper(reg ptr u32[16] pstate, inline int index_a, inline int index_b, inline int index_c, inline int index_d) -> reg ptr u32[16]{
+    reg u32 a, b, c, d;
+    a = pstate[index_a];
+    b = pstate[index_b];
+    c = pstate[index_c];
+    d = pstate[index_d];
+    a, b, c, d = quarterround(a, b, c, d);
+    pstate[index_a] = a;
+    pstate[index_b] = b;
+    pstate[index_c] = c;
+    pstate[index_d] = d;
+    return pstate;
+}
+
+// Diagonal round: applies quarterround to all 4 diagonals
+// Diagonal 0: (0, 5, 10, 15)
+// Diagonal 1: (1, 6, 11, 12)
+// Diagonal 2: (2, 7, 8, 13)
+// Diagonal 3: (3, 4, 9, 14)
 inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
-    pstate = qr_pair(pstate, 0, 5, 10, 15,   1, 6, 11, 12);
-    pstate = qr_pair(pstate, 2, 7,  8, 13,   3, 4,  9, 14);
+    reg u32 a, b, c, d;
+    inline int i;
+    pstate = diagonal_helper(pstate, 0, 5, 10, 15);
+    pstate = diagonal_helper(pstate, 1, 6, 11, 12);
+    pstate = diagonal_helper(pstate, 2, 7, 8, 13);
+    pstate = diagonal_helper(pstate, 3, 4, 9, 14);
     return pstate;
 }
-
 
 fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64]{
     stack u32[16] ws;
@@ -145,33 +142,26 @@ fn chacha20_ietf_ivsetup(reg ptr u32[16] state_ptr, reg ptr u8[12] nonce_ptr) ->
 
 fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct_ptr, reg u32 msg_len) -> reg ptr u32[16]{
     stack u8[64] keystream;
-    stack u32 s_ct, s_len, s_done;
     reg ptr u8[64] keystream_ptr;
     reg u32 bytes_done, block_len, block_start, byte_index, byte, word, counter;
     inline int i;
 
-    // Values needed after the block call live on the stack
-    s_ct = ct_ptr;
-    s_len = msg_len;
-    bytes_done = 0;
-    s_done = bytes_done;
-
     keystream_ptr = keystream;
+    bytes_done = 0;
 
     while (bytes_done < msg_len) {
         // Generate 64 bytes of keystream from the current state
         keystream_ptr = chacha20_block(keystream_ptr, state_ptr);
 
-        // Reload from stack
-        bytes_done = s_done;
-        block_len = s_len;
+        // Check whether on last block or not
+        block_len = msg_len;
         block_len -= bytes_done;
         if (block_len > 64) {
             block_len = 64;
         }
 
         // Address in the output buffer where this block starts
-        block_start = s_ct;
+        block_start = ct_ptr;
         block_start += bytes_done;
 
         // Full 64-byte block: copy 16 words of 4 bytes
@@ -195,10 +185,7 @@ fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct
         counter += 1;
         state_ptr[12] = counter;
 
-        // Save progress, reload loop bound for the condition
         bytes_done += block_len;
-        s_done = bytes_done;
-        msg_len = s_len;
     }
 
     return state_ptr;

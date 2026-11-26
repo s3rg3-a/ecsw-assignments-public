@@ -67,28 +67,70 @@ inline fn diagonal_round(reg ptr u32[16] pstate) -> reg ptr u32[16] {
     return pstate;
 }
 
+// One quarterround where 'a' stays in a register; b, c, d are loaded/stored.
+inline fn qr_keep_a(reg ptr u32[16] p, reg u32 a, inline int ib, inline int ic, inline int id)
+    -> reg ptr u32[16], reg u32 {
+    reg u32 b, c, d;
+    b = p[ib];
+    c = p[ic];
+    d = p[id];
+    a, b, c, d = quarterround(a, b, c, d);
+    p[ib] = b;
+    p[ic] = c;
+    p[id] = d;
+    return p, a;
+}
+
+// Column round + diagonal round with row a (words 0-3) kept in registers.
+// Column k and diagonal k both use word k, so a0..a3 never have to move.
+inline fn double_round_keep_a(reg ptr u32[16] p, reg u32 a0, reg u32 a1, reg u32 a2, reg u32 a3)
+    -> reg ptr u32[16], reg u32, reg u32, reg u32, reg u32 {
+    // Column round
+    p, a0 = qr_keep_a(p, a0, 4,  8, 12);
+    p, a1 = qr_keep_a(p, a1, 5,  9, 13);
+    p, a2 = qr_keep_a(p, a2, 6, 10, 14);
+    p, a3 = qr_keep_a(p, a3, 7, 11, 15);
+    // Diagonal round
+    p, a0 = qr_keep_a(p, a0, 5, 10, 15);
+    p, a1 = qr_keep_a(p, a1, 6, 11, 12);
+    p, a2 = qr_keep_a(p, a2, 7,  8, 13);
+    p, a3 = qr_keep_a(p, a3, 4,  9, 14);
+    return p, a0, a1, a2, a3;
+}
+
 fn chacha20_block(reg ptr u8[64] output_ptr, reg ptr u32[16] input_ptr) -> reg ptr u8[64]{
     stack u32[16] ws;
     reg ptr u32[16] ws_ptr;
+    reg u32 a0, a1, a2, a3;
     reg u32 x, y;
     inline int i;
 
-    // Copy input state into working state
-    for i = 0 to 16 {
+    // Row a (words 0-3) stays in registers for all 20 rounds
+    a0 = input_ptr[0];
+    a1 = input_ptr[1];
+    a2 = input_ptr[2];
+    a3 = input_ptr[3];
+
+    // Rows b, c, d (words 4-15) go to the working state on the stack
+    for i = 4 to 16 {
         x = input_ptr[i];
         ws[i] = x;
     }
-    
-    // Apply column and diagonal rounds
+
+    // 20 rounds = 10 double rounds
     ws_ptr = ws;
     for i = 0 to 10 {
-        ws_ptr = column_round(ws_ptr);
-        ws_ptr = diagonal_round(ws_ptr);
+        ws_ptr, a0, a1, a2, a3 = double_round_keep_a(ws_ptr, a0, a1, a2, a3);
     }
 
-    // Add the state and working_state
-    // state <- state + working_state
-    for i = 0 to 16 {
+    // Feed-forward: row a from registers ...
+    y = input_ptr[0]; a0 += y; output_ptr[:u32 0] = a0;
+    y = input_ptr[1]; a1 += y; output_ptr[:u32 1] = a1;
+    y = input_ptr[2]; a2 += y; output_ptr[:u32 2] = a2;
+    y = input_ptr[3]; a3 += y; output_ptr[:u32 3] = a3;
+
+    // ... rows b, c, d from the working state
+    for i = 4 to 16 {
         x = ws_ptr[i];
         y = input_ptr[i];
         x += y;
@@ -142,26 +184,33 @@ fn chacha20_ietf_ivsetup(reg ptr u32[16] state_ptr, reg ptr u8[12] nonce_ptr) ->
 
 fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct_ptr, reg u32 msg_len) -> reg ptr u32[16]{
     stack u8[64] keystream;
+    stack u32 s_ct, s_len, s_done;
     reg ptr u8[64] keystream_ptr;
     reg u32 bytes_done, block_len, block_start, byte_index, byte, word, counter;
     inline int i;
 
-    keystream_ptr = keystream;
+    // Values needed after the block call live on the stack
+    s_ct = ct_ptr;
+    s_len = msg_len;
     bytes_done = 0;
+    s_done = bytes_done;
+
+    keystream_ptr = keystream;
 
     while (bytes_done < msg_len) {
         // Generate 64 bytes of keystream from the current state
         keystream_ptr = chacha20_block(keystream_ptr, state_ptr);
 
-        // Check whether on last block or not
-        block_len = msg_len;
+        // Reload from stack
+        bytes_done = s_done;
+        block_len = s_len;
         block_len -= bytes_done;
         if (block_len > 64) {
             block_len = 64;
         }
 
         // Address in the output buffer where this block starts
-        block_start = ct_ptr;
+        block_start = s_ct;
         block_start += bytes_done;
 
         // Full 64-byte block: copy 16 words of 4 bytes
@@ -185,7 +234,10 @@ fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct
         counter += 1;
         state_ptr[12] = counter;
 
+        // Save progress, reload loop bound for the condition
         bytes_done += block_len;
+        s_done = bytes_done;
+        msg_len = s_len;
     }
 
     return state_ptr;

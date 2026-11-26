@@ -193,6 +193,9 @@ fn chacha20_encrypt_bytes(reg ptr u32[16] state_ptr, reg u32 msg_ptr, reg u32 ct
     bytes_done = 0;
 
     while (bytes_done < msg_len) {
+
+        () = #spill(state_ptr, ct_ptr, msg_len, bytes_done);
+        
         // Generate 64 bytes of keystream from the current state
         keystream_ptr = chacha20_block(keystream_ptr, state_ptr);
 
